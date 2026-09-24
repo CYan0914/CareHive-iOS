@@ -162,7 +162,9 @@ struct RecipientSummary: Decodable, Identifiable, Hashable {
     var callName: String { preferredName ?? displayName }
 }
 
-enum Role: String, Decodable, CaseIterable {
+/// `Codable` rather than `Decodable` because a role travels in both directions:
+/// the owner picks one when inviting, and the server sends one back.
+enum Role: String, Codable, CaseIterable {
     case viewer, member, editor, owner
 
     /// Whether this role may record that something happened. Mirrors the
@@ -496,7 +498,10 @@ struct AlreadyGiven: Decodable {
     /// server sends no name.
     var attribution: String {
         let who = givenByName?.trimmingCharacters(in: .whitespaces) ?? ""
-        let when = givenAtLocal.map(WallClock.time) ?? ""
+        // A closure rather than `map(WallClock.time)` on purpose: `time` takes
+        // an `Optional`, and Swift has no implicit conversion between function
+        // types, so the bare reference does not type-check here.
+        let when = givenAtLocal.map({ WallClock.time($0) }) ?? ""
         switch (who.isEmpty, when.isEmpty) {
         case (false, false): return "\(who) gave it at \(when)"
         case (false, true): return "\(who) gave it"

@@ -22,7 +22,37 @@ struct CareHiveApp: App {
             // SwiftUI app with no scene delegate. There is deliberately no
             // SwiftUI-side lock here: one would be a no-op that reads like a
             // guarantee.
-            RootView(api: api, demoScreen: AppEnvironment.demoScreen)
+            RootGate(api: api, demoScreen: AppEnvironment.demoScreen)
+        }
+    }
+}
+
+/// Decides whether this launch starts at the door or inside the app.
+///
+/// Kept out of `RootView` so that the screen picker stays a pure switch over
+/// launch arguments. A sign-in gate folded into it would mean a capture job
+/// with no session rendering the sign-in screen for every screenshot -- and
+/// the failure would look like "the demo is broken" rather than "the gate is
+/// in the way". A demo launch therefore skips the gate entirely, which is
+/// honest: there is no session behind `DemoAPI` to check.
+struct RootGate: View {
+    let api: any CareHiveAPI
+    let demoScreen: String?
+
+    @State private var token: String? = SessionStore.shared.token
+
+    var body: some View {
+        if demoScreen != nil || token != nil {
+            RootView(api: api, demoScreen: demoScreen)
+        } else {
+            SignInView(api: api) { signedIn in
+                // The one place a credential is written. Deliberately in the
+                // view rather than in the client, so that a sign-in which
+                // fails halfway cannot leave a stored token behind -- see the
+                // note on `SignedIn`.
+                SessionStore.shared.token = signedIn.sessionToken
+                token = signedIn.sessionToken
+            }
         }
     }
 }
@@ -45,15 +75,59 @@ struct RootView: View {
             DemoRecordScreen(api: api)
         case "meds":
             DemoMedsScreen(api: api)
+        case "supply":
+            DemoSupplyScreen(api: api)
+        case "history":
+            DemoHistoryScreen(api: api)
+        case "circle":
+            DemoCircleScreen(api: api)
+        case "displays":
+            DemoDisplaysScreen(api: api)
+        case "settings":
+            DemoSettingsScreen(api: api)
+        case "paywall":
+            PaywallView(api: api)
+        case "wall":
+            // The tablet's own screen, on the tablet. Same binary, different
+            // credential -- see `WallView`.
+            WallRootView()
+        case "signin":
+            SignInView(api: api) { _ in }
         default:
-            TodayView(api: api)
+            DemoAppTabs(api: api)
         }
     }
 }
 
-/// The medication list, reached directly rather than by tapping through, for the
-/// same reason the other demo screens exist: the capture job launches straight
-/// onto the screen it is photographing.
+// MARK: - The app, as the capture job sees it
+
+/// The real navigation, with the real screens, so a screenshot of "settings"
+/// is a screenshot of the app's settings rather than of a test harness.
+private struct DemoAppTabs: View {
+    let api: any CareHiveAPI
+
+    var body: some View {
+        TabView {
+            NavigationStack { TodayView(api: api) }
+                .tabItem { Label("Today", systemImage: "calendar") }
+            NavigationStack {
+                MedicationListView(api: api, recipientId: "rc_demo_margaret", canEdit: true)
+            }
+            .tabItem { Label("Medications", systemImage: "pills") }
+            NavigationStack {
+                HistoryView(api: api, recipientId: "rc_demo_margaret")
+            }
+            .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
+            NavigationStack { SettingsView(api: api) }
+                .tabItem { Label("You", systemImage: "person.crop.circle") }
+        }
+    }
+}
+
+/// The screens below are reached directly rather than by tapping through, for
+/// the same reason the other demo screens exist: the capture job launches
+/// straight onto the screen it is photographing, and driving a tab bar from a
+/// shell script is a second thing that can break.
 private struct DemoMedsScreen: View {
     let api: any CareHiveAPI
 
@@ -61,6 +135,54 @@ private struct DemoMedsScreen: View {
         NavigationStack {
             MedicationListView(api: api, recipientId: "rc_demo_margaret", canEdit: true)
         }
+    }
+}
+
+private struct DemoSupplyScreen: View {
+    let api: any CareHiveAPI
+
+    var body: some View {
+        NavigationStack {
+            SupplyView(api: api, recipientId: "rc_demo_margaret")
+        }
+    }
+}
+
+private struct DemoHistoryScreen: View {
+    let api: any CareHiveAPI
+
+    var body: some View {
+        NavigationStack {
+            HistoryView(api: api, recipientId: "rc_demo_margaret")
+        }
+    }
+}
+
+private struct DemoCircleScreen: View {
+    let api: any CareHiveAPI
+
+    var body: some View {
+        NavigationStack {
+            CircleView(api: api, recipientId: "rc_demo_margaret")
+        }
+    }
+}
+
+private struct DemoDisplaysScreen: View {
+    let api: any CareHiveAPI
+
+    var body: some View {
+        NavigationStack {
+            DisplaysView(api: api, recipientId: "rc_demo_margaret")
+        }
+    }
+}
+
+private struct DemoSettingsScreen: View {
+    let api: any CareHiveAPI
+
+    var body: some View {
+        NavigationStack { SettingsView(api: api) }
     }
 }
 

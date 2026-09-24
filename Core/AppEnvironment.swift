@@ -28,16 +28,26 @@ enum AppEnvironment {
 
     /// Where the API lives.
     ///
-    /// The default is the local dev server rather than production, so that a
-    /// build someone runs from Xcode cannot accidentally write a real family's
-    /// dose record. Shipping something pointed at production is a deliberate
-    /// edit to this one line with a release build behind it.
+    /// Debug builds point at the local dev server so that a build someone runs
+    /// from Xcode cannot accidentally write a real family's dose record. That
+    /// safety has to stop at the archive: a release build sent to Apple with a
+    /// loopback address in it is an app whose sign-in screen fails for every
+    /// reviewer, which is a rejection rather than a bug report. So the split is
+    /// on the build configuration rather than left as a line to remember.
+    ///
+    /// The production host is the one `helpers/deploy_ssh.py` provisions. If
+    /// the API is ever deployed somewhere else, this string and that constant
+    /// have to move together -- which is why there is exactly one of each.
     static var baseURL: URL {
         if let override = ProcessInfo.processInfo.environment["CAREHIVE_API"],
            let url = URL(string: override) {
             return url
         }
+        #if DEBUG
         return URL(string: "http://127.0.0.1:8823")!
+        #else
+        return URL(string: "https://carehive.taomindapp.com")!
+        #endif
     }
 
     /// The server for this launch. Demo never touches the network -- not even a

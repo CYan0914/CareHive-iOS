@@ -98,6 +98,21 @@ enum DS {
         guard let value, !value.isEmpty else { return "" }
         return value
     }
+
+    /// "21:00" from 1260.
+    ///
+    /// Quiet hours are minutes past midnight on a clock that is the *reader's*
+    /// own, not the recipient's -- which is why this lives here rather than
+    /// beside `WallClock`, whose whole rule is that the only clock the app
+    /// displays is somebody else's. The two must not be confused, so they are
+    /// not in the same file.
+    ///
+    /// Wraps rather than clamps: 1440 and 0 are both midnight, and a range that
+    /// ends at 08:00 the next morning is the ordinary case, not an error.
+    static func clock(minutes: Int) -> String {
+        let m = ((minutes % 1440) + 1440) % 1440
+        return String(format: "%02d:%02d", m / 60, m % 60)
+    }
 }
 
 // MARK: - Reusable pieces
