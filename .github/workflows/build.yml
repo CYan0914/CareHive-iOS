@@ -1,0 +1,183 @@
+name: Build CareHive
+
+# One workflow, two jobs. A compile check and an archive split across two files
+# are two things to watch, and the way that fails is watching the wrong one and
+# believing a build succeeded.
+#
+# The default dispatch -- and every push -- is a simulator compile plus the unit
+# tests. The archive job runs only when `create_ipa` is explicitly true, so the
+# expensive path is never taken by accident.
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_ipa:
+        description: 'Build a signed IPA and upload it to TestFlight'
+        required: false
+        default: false
+        type: boolean
+      screenshots:
+        description: 'Capture App Store screenshots (6.5" iPhone + 13" iPad)'
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Compile check and tests (the default) ────────────────────────────────
+  build:
+    name: Build and test for iOS Simulator
+    if: |
+      github.event_name == 'push' ||
+      (github.event.inputs.create_ipa != 'true' && github.event.inputs.screenshots != 'true')
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode (26+ required for App Store uploads)
+        run: |
+          echo "=== Available Xcode ==="
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none found)"
+          for xc in /Applications/Xcode*.app; do
+            if sudo xcode-select -s "$xc/Contents/Developer" 2>/dev/null; then
+              sdk=$(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null || echo "unknown")
+              echo "  $xc -> iOS SDK $sdk"
+              if [[ "$sdk" == 2[6-9].* ]] || [[ "$sdk" == [3-9]* ]]; then
+                echo "Selected: $xc (iOS SDK $sdk)"
+                xcodebuild -version
+                exit 0
+              fi
+            fi
+          done
+          echo "No Xcode with SDK 26+ found -- falling back"
+          xcodebuild -version
+
+      - name: Install xcodegen
+        run: |
+          brew install xcodegen 2>/dev/null || brew upgrade xcodegen 2>/dev/null
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: |
+          # Nothing is committed to generate over, but a stale directory from a
+          # cached runner would carry an older Xcode format than the one
+          # selected above, and xcodebuild refuses to open it.
+          rm -rf CareHive.xcodeproj
+          xcodegen generate
+
+      - name: Ensure the iOS platform is installed
+        run: |
+          sudo xcodebuild -license accept 2>&1 || true
+          sudo xcodebuild -runFirstLaunch 2>&1 || true
+          for i in 1 2 3; do
+            echo "Attempt $i..."
+            sudo xcodebuild -downloadPlatform iOS -quiet 2>&1 && break
+            echo "Attempt $i failed, sleeping 10s..."
+            sleep 10
+          done
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version || echo "iphoneos SDK not found"
+
+      - name: Build for Simulator
+        run: |
+          # Unsigned on purpose: this job answers "does it compile", and pulling
+          # signing credentials in would make a code error and a certificate
+          # problem look the same.
+          #
+          # The log goes to a file rather than straight through xcpretty, because
+          # xcpretty drops the body of tool errors -- an actool failure came back
+          # as "CompileAssetCatalogVariant ... failed" with no reason in it, and
+          # the reason is the only part worth having. Hearth paid for that one.
+          set +e
+          xcodebuild build \
+            -project CareHive.xcodeproj \
+            -scheme CareHive \
+            -sdk iphonesimulator \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            > build.log 2>&1
+          status=$?
+          set -e
+
+          if [ $status -ne 0 ]; then
+            echo "::group::errors"
+            grep -nE "error:|error :|fatal" build.log | head -60 || true
+            echo "::endgroup::"
+            echo "::group::last 100 lines of the raw log"
+            tail -100 build.log
+            echo "::endgroup::"
+            exit $status
+          fi
+          xcpretty < build.log
+
+      # The tests are the reason this job exists at all. `WallClock` and the
+      # three-state PATCH encoding are pure functions whose failure mode is
+      # silence: no crash, no red build, and no sign on the developer's own
+      # phone -- just a dose shown at the wrong hour to a relative in another
+      # timezone. Nothing else in the pipeline can catch that.
+      - name: Run unit tests
+        run: |
+          # The simulator is named rather than hardcoded. Runners get their
+          # device list refreshed with each Xcode, so pinning "iPhone 16" works
+          # until it doesn't, and the failure looks like a test failure.
+          UDID=$(xcrun simctl list devices available -j \
+            | python3 -c '
+import json,sys
+devices = json.load(sys.stdin)["devices"]
+best = None
+for runtime, items in devices.items():
+    if "iOS" not in runtime:
+        continue
+    for d in items:
+        if not d.get("isAvailable") or "iPhone" not in d["name"]:
+            continue
+        best = best or d["udid"]
+print(best or "")
+')
+          if [ -z "$UDID" ]; then
+            echo "::error::no available iPhone simulator on this runner"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "Using simulator $UDID"
+
+          set +e
+          xcodebuild test \
+            -project CareHive.xcodeproj \
+            -scheme CareHive \
+            -destination "id=$UDID" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            > test.log 2>&1
+          status=$?
+          set -e
+
+          # Failures are quoted out of the raw log before it is summarised. The
+          # interesting line is the assertion message, and it is buried.
+          grep -nE "error:|failed|XCTAssert" test.log | head -40 || true
+          if [ $status -ne 0 ]; then
+            echo "::group::last 120 lines"
+            tail -120 test.log
+            echo "::endgroup::"
+            exit $status
+          fi
+          grep -E "Test Suite|Executed .* test" test.log | tail -20 || true
+
+      - name: Upload build logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build.log
+            test.log
+          retention-days: 7

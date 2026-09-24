@@ -1,0 +1,35 @@
+# The Xcode project is generated from project.yml, and CI regenerates it on
+# every run. A committed .xcodeproj is a merge-conflict magnet that also hides
+# a broken project.yml -- the file that actually decides how the app is built.
+*.xcodeproj/
+*.xcworkspace/
+
+# Build products.
+build/
+DerivedData/
+*.xcarchive/
+*.ipa/
+*.dSYM.zip
+build.log
+test.log
+
+# Xcode per-user state.
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Swift Package Manager.
+.build/
+
+# The screenshot job's output, and anything else the capture pipeline leaves.
+# Rendered screenshots are large binaries that are re-derivable from the demo
+# mode in the app, so the images themselves do not belong in the history --
+# only the script that produces them.
+screenshots/
+
+# macOS.
+.DS_Store
+
+# Local environment.
+.env
+.env.local
