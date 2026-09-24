@@ -356,15 +356,91 @@ struct Medication: Decodable, Identifiable, Hashable {
     let summary: String?
 }
 
+/// One time of day a medication is taken.
+///
+/// Decoded by hand for one field. `days_of_week` is a single field with two wire
+/// shapes: the server accepts a list of numbers or names (`[1,3,5]`, `["mon"]`)
+/// and normalizes both to a comma-separated string, which is what it stores and
+/// therefore what it sends back. A client that modelled only the array would
+/// decode cleanly against its own fixtures and then fail on the first real
+/// response that had any days set -- and the medications most likely to carry
+/// days are the ones the family most needs the list to show. So the field is
+/// read as a JSON tree and normalized once, here, and no view ever sees the
+/// string form.
 struct MedSlot: Decodable, Identifiable, Hashable {
     let id: String
+    /// A wall clock label -- "08:00" -- with no date and no zone. See the note
+    /// at the top of this file: it is displayed literally and never converted.
     let localTime: String
     let label: String?
-    /// 0 = Sunday, matching the server. Absent means every day.
+    /// The days this time is taken on. 0 = Sunday, matching the server.
+    /// `nil` means every day, which is also what the server stores for it.
     let daysOfWeek: [Int]?
     let intervalDays: Int?
     let anchorOn: String?
     let active: Bool
+
+    private enum Keys: String, CodingKey {
+        case id, label, active
+        case localTime, daysOfWeek, intervalDays, anchorOn
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decode(String.self, forKey: .id)
+        localTime = try c.decode(String.self, forKey: .localTime)
+        label = try c.decodeIfPresent(String.self, forKey: .label)
+        intervalDays = try c.decodeIfPresent(Int.self, forKey: .intervalDays)
+        anchorOn = try c.decodeIfPresent(String.self, forKey: .anchorOn)
+        active = (try? c.decodeIfPresent(Bool.self, forKey: .active)) ?? true
+        daysOfWeek = Self.weekdays(try c.decodeIfPresent(JSONValue.self, forKey: .daysOfWeek))
+    }
+
+    /// The memberwise initializer the decoder above would otherwise have
+    /// suppressed. The demo server and the tests build slots directly.
+    init(id: String, localTime: String, label: String?, daysOfWeek: [Int]?,
+         intervalDays: Int?, anchorOn: String?, active: Bool = true) {
+        self.id = id
+        self.localTime = localTime
+        self.label = label
+        self.daysOfWeek = daysOfWeek
+        self.intervalDays = intervalDays
+        self.anchorOn = anchorOn
+        self.active = active
+    }
+
+    /// "1,3,5" / [1,3,5] / ["mon"] -> [1,3,5]. Anything that is not a day, or
+    /// nothing at all, means every day.
+    ///
+    /// All seven collapsing to `nil` mirrors `models.parse_days_of_week`, which
+    /// refuses to store "0,1,2,3,4,5,6" for the same reason: so that one state
+    /// -- every day -- has one representation. Without this the editor would
+    /// show "every day" two different ways depending on how the row was
+    /// created, and the next save would send a schedule the family never chose.
+    static func weekdays(_ raw: JSONValue?) -> [Int]? {
+        let days: [Int]
+        switch raw {
+        case .array(let items):
+            days = items.compactMap {
+                $0.doubleValue.map { Int($0) } ?? $0.stringValue.flatMap(weekday(named:))
+            }
+        case .string(let text):
+            days = text.split(separator: ",").compactMap {
+                Int($0.trimmingCharacters(in: .whitespaces))
+            }
+        default:
+            return nil
+        }
+        let valid = Set(days.filter { (0...6).contains($0) })
+        if valid.isEmpty || valid.count == 7 { return nil }
+        return valid.sorted()
+    }
+
+    /// The three-letter names the server also accepts, for the array form.
+    private static func weekday(named name: String) -> Int? {
+        let key = String(name.trimmingCharacters(in: .whitespaces).lowercased().prefix(3))
+        return ["sun", "mon", "tue", "wed", "thu", "fri", "sat"].firstIndex(of: key)
+    }
 }
 
 /// A window during which a medication is taken at a different amount -- a
@@ -376,6 +452,30 @@ struct MedPhase: Decodable, Identifiable, Hashable {
     let endsOn: String?
     let unitsPerDose: Double?
     let label: String?
+    /// A step that never ends is a step that is still going.
+    var isOpenEnded: Bool { endsOn == nil }
+
+    /// "Sep 25 – Oct 2" / "from Sep 25". Both ends are recipient-local dates and
+    /// are printed as written; `WallClock.shortDate` handles that.
+    var range: String {
+        let start = WallClock.shortDate(startsOn)
+        guard let endsOn else { return "from \(start)" }
+        return "\(start) – \(WallClock.shortDate(endsOn))"
+    }
+}
+
+/// Everything the medication list endpoint sends, not just the list.
+///
+/// The form's picker of dose forms comes from the server for the same reason
+/// nothing else here is hardcoded: a copy of that list in the app is a copy that
+/// drifts, and a form the server does not recognise is a medication whose
+/// `form` field quietly stops matching anything. `recipientTimezone` travels
+/// with the list because the times on this screen are the recipient's, and a
+/// daughter three zones away is the person most likely to need to be told that.
+struct MedicationCatalog: Decodable {
+    let medications: [Medication]
+    let formOptions: [String]
+    let recipientTimezone: String?
 }
 
 // MARK: - The race

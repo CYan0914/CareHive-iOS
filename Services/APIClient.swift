@@ -18,7 +18,25 @@ protocol CareHiveAPI: Sendable {
     func circles() async throws -> [RecipientSummary]
     func circle(_ id: String) async throws -> Recipient
     func members(_ recipientId: String) async throws -> [Member]
-    func medications(_ recipientId: String) async throws -> [Medication]
+
+    /// The medication list, named for the endpoint and returning everything it
+    /// sends -- the list, the form options and the recipient's timezone all come
+    /// from the same response, and splitting them would be two calls to build
+    /// one screen.
+    func medications(_ recipientId: String) async throws -> MedicationCatalog
+
+    /// Both write paths send the whole form, not a diff. See `MedicationDraft`.
+    func createMedication(_ recipientId: String,
+                          _ draft: MedicationDraft) async throws -> Medication
+    func updateMedication(_ medicationId: String,
+                          _ draft: MedicationDraft) async throws -> Medication
+    /// Stops a medication. Cancels what has not happened yet; keeps every dose
+    /// that was recorded, because "what was she taking in March" is a question
+    /// this app exists to answer.
+    func archiveMedication(_ medicationId: String) async throws
+    /// Removes one step of a taper. Its own call rather than part of the save,
+    /// because it changes the amount on doses already on the family's screen.
+    func deletePhase(_ phaseId: String) async throws
 
     func today(_ recipientId: String) async throws -> DayFeed
     func day(_ recipientId: String, on: String) async throws -> DayFeed
@@ -78,7 +96,7 @@ struct ScheduleDay: Decodable, Identifiable {
 private struct CirclesBody: Decodable { let recipients: [RecipientSummary] }
 private struct CircleBody: Decodable { let recipient: Recipient }
 private struct MembersBody: Decodable { let members: [Member] }
-private struct MedsBody: Decodable { let medications: [Medication] }
+private struct MedBody: Decodable { let medication: Medication }
 private struct ScheduleBody: Decodable { let days: [ScheduleDay] }
 private struct GiveBody: Decodable {
     let duplicate: Bool?
@@ -229,9 +247,35 @@ actor LiveAPI: CareHiveAPI {
         return body.members
     }
 
-    func medications(_ recipientId: String) async throws -> [Medication] {
-        let body: MedsBody = try await get("/v1/recipients/\(recipientId)/medications")
-        return body.medications
+    func medications(_ recipientId: String) async throws -> MedicationCatalog {
+        try await get("/v1/recipients/\(recipientId)/medications")
+    }
+
+    func createMedication(_ recipientId: String,
+                          _ draft: MedicationDraft) async throws -> Medication {
+        let body = try rawEncoder.encode(draft.wireBody)
+        let data = try await request("POST", "/v1/recipients/\(recipientId)/medications",
+                                     body: body)
+        return try decoder.decode(MedBody.self, from: data).medication
+    }
+
+    func updateMedication(_ medicationId: String,
+                          _ draft: MedicationDraft) async throws -> Medication {
+        let body = try rawEncoder.encode(draft.wireBody)
+        let data = try await request("PATCH", "/v1/medications/\(medicationId)", body: body)
+        return try decoder.decode(MedBody.self, from: data).medication
+    }
+
+    func archiveMedication(_ medicationId: String) async throws {
+        // The response names the medication and counts the doses it cancelled,
+        // which the caller does not need: the list is reloaded afterwards, and
+        // the count is a number to reconcile against the screen rather than to
+        // show. Discarded deliberately.
+        _ = try await request("DELETE", "/v1/medications/\(medicationId)")
+    }
+
+    func deletePhase(_ phaseId: String) async throws {
+        _ = try await request("DELETE", "/v1/phases/\(phaseId)")
     }
 
     func schedule(_ recipientId: String, days: Int) async throws -> [ScheduleDay] {

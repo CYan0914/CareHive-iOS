@@ -58,6 +58,28 @@ enum WallClock {
         return format(hour: p.hour, minute: p.minute)
     }
 
+    /// "08:00" -> (8, 0). The bare clock form, which is what a *slot* stores.
+    ///
+    /// Separate from `parts` above because a slot has no date: it is a time of
+    /// day the family chose, and it is the same time of day on every date. The
+    /// length check there is what keeps an instant from being read as a label,
+    /// so a bare "08:00" has to be read somewhere else rather than by loosening
+    /// it. The same rule applies here and for the same reason: two integers in,
+    /// no calendar consulted.
+    static func clockParts(_ value: String?) -> (hour: Int, minute: Int)? {
+        guard let value else { return nil }
+        let hm = value.split(separator: ":")
+        guard hm.count >= 2, let h = Int(hm[0]), let m = Int(hm[1]),
+              (0...23).contains(h), (0...59).contains(m) else { return nil }
+        return (h, m)
+    }
+
+    /// "08:00" -> "8:00 AM", for a dose time on the medication list.
+    static func clock(_ value: String?) -> String {
+        guard let p = clockParts(value) else { return "" }
+        return format(hour: p.hour, minute: p.minute)
+    }
+
     static func format(hour: Int, minute: Int) -> String {
         // Built in GMT purely so that the formatter below cannot shift it. The
         // resulting `Date` is meaningless as a moment in time and is never used
@@ -131,6 +153,46 @@ enum WallClock {
         var cb = DateComponents(); cb.year = b.year; cb.month = b.month; cb.day = b.day
         guard let da = cal.date(from: ca), let db = cal.date(from: cb) else { return nil }
         return cal.dateComponents([.day], from: da, to: db).day
+    }
+
+    /// The one place a date and a `Date` meet, and both directions are here so
+    /// they cannot drift apart.
+    ///
+    /// A `DatePicker` needs a `Date` and hands one back, so the editor has to
+    /// convert -- but a calendar date is a *label*, and the device's zone is
+    /// exactly what must not get into it. Both directions therefore build and
+    /// read the `Date` in GMT, which makes the pair a lossless round trip on any
+    /// device in any zone. The `DatePicker` showing it must be given the same
+    /// zone through the environment, or it will draw the label it was handed
+    /// shifted by the device's offset -- see `MedicationEditorView`.
+    static let gmt = TimeZone(secondsFromGMT: 0)!
+
+    static func date(fromDay isoDay: String?) -> Date? {
+        guard let d = dayParts(isoDay) else { return nil }
+        var c = DateComponents()
+        c.year = d.year; c.month = d.month; c.day = d.day
+        c.hour = 12                       // midday, so no rounding can move a day
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = gmt
+        return cal.date(from: c)
+    }
+
+    static func isoDay(_ date: Date) -> String {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = gmt
+        let c = cal.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year ?? 2026, c.month ?? 1, c.day ?? 1)
+    }
+
+    /// "2026-09-25" -> "Sep 25". Shorter than `shortDate` (no weekday), for
+    /// tables of dates rather than headings.
+    static func dayMonth(_ isoDay: String?) -> String {
+        guard let d = date(fromDay: isoDay) else { return "" }
+        let f = DateFormatter()
+        f.timeZone = gmt
+        f.locale = .current
+        f.setLocalizedDateFormatFromTemplate("MMMd")
+        return f.string(from: d)
     }
 
     // MARK: - Sorting

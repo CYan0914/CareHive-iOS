@@ -43,8 +43,23 @@ struct RootView: View {
             DemoRaceScreen()
         case "record":
             DemoRecordScreen(api: api)
+        case "meds":
+            DemoMedsScreen(api: api)
         default:
             TodayView(api: api)
+        }
+    }
+}
+
+/// The medication list, reached directly rather than by tapping through, for the
+/// same reason the other demo screens exist: the capture job launches straight
+/// onto the screen it is photographing.
+private struct DemoMedsScreen: View {
+    let api: any CareHiveAPI
+
+    var body: some View {
+        NavigationStack {
+            MedicationListView(api: api, recipientId: "rc_demo_margaret", canEdit: true)
         }
     }
 }
