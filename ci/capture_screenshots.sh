@@ -161,6 +161,20 @@ echo
 capture "$PHONE"  "$OUT/iphone65" iphone "${PHONE_SCREENS[@]}"
 capture "$TABLET" "$OUT/ipad13"   tablet "${TABLET_SCREENS[@]}"
 
+# The subscription review screenshot, captured on its own rather than appended
+# to PHONE_SCREENS.
+#
+# It is not a listing image. App Store Connect refuses to submit an app whose
+# auto-renewable subscription is in MISSING_METADATA, and the only missing
+# piece is this: a picture of the offer for the reviewer. Whether a paywall
+# belongs in the storefront is a marketing decision, and quietly adding a
+# ninth screenshot to the listing would be making it by accident.
+#
+# Renders without a price, because a simulator has no storefront -- the screen
+# degrades to naming the plans rather than inventing a number, which is the
+# behaviour `PaywallView.loadPrices()` was written for.
+capture "$PHONE" "$OUT/subreview" iphone paywall
+
 echo
 echo "captured:"
 find "$OUT" -name '*.png' | sort | while read -r f; do echo "  $(dims "$f")  $f"; done

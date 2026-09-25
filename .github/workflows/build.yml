@@ -464,6 +464,16 @@ jobs:
       - name: Export and upload to TestFlight
         run: |
           set -o pipefail
+          # The resolved inputs, printed before anything can fail. Every one of
+          # these is inherited from a step above, and a failure caused by one of
+          # them being empty is indistinguishable from a failure caused by
+          # Apple, unless the values are on the record.
+          echo "PROFILE_NAME='$PROFILE_NAME'"
+          echo "SIGN_IDENTITY='$SIGN_IDENTITY'"
+          echo "ASC_KEY_ID='$ASC_KEY_ID'"
+          echo "installed profiles:"
+          ls -1 "$HOME/Library/MobileDevice/Provisioning Profiles/" 2>/dev/null || echo "  (none)"
+
           # Generated rather than committed so the profile name in it cannot
           # drift from the profile actually installed two steps up. ci/
           # ExportOptions.plist is kept as the documented shape of this file.
@@ -477,8 +487,17 @@ jobs:
             -c "Add :manageAppVersionAndBuildNumber bool false" \
             -c "Add :provisioningProfiles dict" \
             -c "Add :provisioningProfiles:com.cyan0914.carehive string $PROFILE_NAME" \
-            "$OPTIONS"
+            "$OPTIONS" || {
+              echo "::error::could not write ExportOptions.plist"
+              exit 1
+            }
           plutil -p "$OPTIONS"
+
+          KEY="$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
+          if [ ! -s "$KEY" ]; then
+            echo "::error::no App Store Connect key at $KEY"
+            exit 1
+          fi
 
           # The authentication key stays: it is what uploads to TestFlight.
           # -allowProvisioningUpdates goes, because there is nothing to update.
@@ -486,15 +505,32 @@ jobs:
             -archivePath "$RUNNER_TEMP/CareHive.xcarchive" \
             -exportOptionsPlist "$OPTIONS" \
             -exportPath "$RUNNER_TEMP/export" \
-            -authenticationKeyPath "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyPath "$KEY" \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             > export.log 2>&1 || {
-              echo "::group::export errors"
-              grep -nE "error:|error :" export.log | head -40 || true
+              # The whole log, and the surrounding state. Selecting "error:"
+              # lines out of export.log was the previous behaviour and it was
+              # the wrong shape twice over: xcodebuild reports some failures
+              # without the word "error" at all, and if the step died before
+              # xcodebuild ran there is no export.log to grep -- so the output
+              # was empty and said nothing about which of the two had happened.
+              echo "::group::export.log"
+              if [ -f export.log ]; then
+                cat export.log
+              else
+                echo "(export.log was never created -- the failure was before xcodebuild)"
+              fi
               echo "::endgroup::"
-              echo "::group::last 80 lines"
-              tail -80 export.log
+              echo "::group::signing state"
+              # No keychain argument: the keychain step ran
+              # `security default-keychain -s`, so the default is the right one,
+              # and `$KEYCHAIN` is a shell variable local to that earlier step
+              # rather than something exported here. Passing it empty searches
+              # nothing and reports an empty identity list, which reads like the
+              # certificate having gone missing.
+              security find-identity -v -p codesigning || true
+              ls -la "$HOME/Library/MobileDevice/Provisioning Profiles/" || true
               echo "::endgroup::"
               exit 1
             }

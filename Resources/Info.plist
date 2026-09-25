@@ -8,6 +8,8 @@
 	<string>CareHive</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -33,9 +35,28 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<!-- iPhone stays portrait. iPad may not.
+
+	     The wall tablet is the reason the iPad entry reads the way it does,
+	     and the reason it cannot stay portrait is App Review's, not ours: an
+	     iPad app that does not declare all four orientations is rejected at
+	     upload with "you need to include all of the
+	     UIInterfaceOrientationPortrait, ...LandscapeLeft, ...LandscapeRight
+	     orientations to support iPad multitasking". There is a
+	     UIRequiresFullScreen escape hatch, and it is the wrong one here: it
+	     exists to opt out of Split View, and opting a family app out of
+	     multitasking to avoid supporting landscape is a worse trade than
+	     letting the layout reflow. Every screen is SwiftUI and reflows.
+
+	     This is the second of the two settings that only the App Store
+	     validator checks. It compiles, installs and runs on a simulator with
+	     one orientation declared, and fails at export. -->
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
