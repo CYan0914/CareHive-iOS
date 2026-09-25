@@ -242,6 +242,33 @@ jobs:
           rm -rf CareHive.xcodeproj
           xcodegen generate
 
+      - name: Ensure the iOS platform is installed
+        run: |
+          # `macos-latest` is a moving target, and so is what it happens to
+          # have preinstalled. A runner that ships Xcode 26 without the iOS 26
+          # platform selects cleanly and then fails at the archive with
+          #
+          #     Unable to find a destination matching the provided destination
+          #     specifier ... error: iOS 26.0 is not installed
+          #
+          # which reads like a scheme or destination problem and is neither.
+          # The first CareHive archive passed only because that particular
+          # runner happened to have the platform; this makes it not a matter
+          # of luck.
+          sudo xcodebuild -license accept 2>&1 || true
+          sudo xcodebuild -runFirstLaunch 2>&1 || true
+          for i in 1 2 3; do
+            echo "Attempt $i..."
+            # No pipe on the xcodebuild call itself: `cmd | tail` returns
+            # tail's exit status, so a failing download would look like a
+            # success and the loop would stop retrying on the first try.
+            sudo xcodebuild -downloadPlatform iOS -quiet 2>&1 && break
+            echo "Attempt $i failed, sleeping 15s..."
+            sleep 15
+          done
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version || echo "iphoneos SDK not found"
+
       - name: Install the App Store Connect API key
         env:
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
