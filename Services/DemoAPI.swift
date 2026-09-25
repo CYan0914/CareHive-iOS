@@ -262,7 +262,8 @@ actor DemoAPI: CareHiveAPI {
     func createMedication(_ recipientId: String,
                           _ draft: MedicationDraft) async throws -> Medication {
         let med = DemoAPI.build(id: "md_demo_\(meds.count + 1)", recipientId: recipientId,
-                                draft: draft, phases: draft.newPhase.map { [$0] } ?? [])
+                                draft: draft,
+                                phases: draft.newPhase.map { [DemoAPI.wirePhase($0, index: 1)] } ?? [])
         meds.append(med)
         return med
     }
@@ -276,10 +277,7 @@ actor DemoAPI: CareHiveAPI {
         // server, where PATCH can add a step but never replace the sequence.
         var phases = meds[i].phases
         if let step = draft.newPhase {
-            phases.append(MedPhase(id: "ph_demo_new_\(phases.count + 1)",
-                                   startsOn: step.startsOn, endsOn: step.endsOn,
-                                   unitsPerDose: step.unitsPerDose,
-                                   label: step.label.isEmpty ? nil : step.label))
+            phases.append(DemoAPI.wirePhase(step, index: phases.count + 1))
         }
         let med = DemoAPI.build(id: medicationId, recipientId: meds[i].recipientId,
                                 draft: draft, phases: phases)
@@ -322,6 +320,34 @@ actor DemoAPI: CareHiveAPI {
     /// fresh ids on every save -- PATCH deactivates the old rows and inserts new
     /// ones. Mirroring that keeps the demo from being quietly kinder than the
     /// thing it stands in for.
+    /// One step of a taper, in the shape the server would have sent it back.
+    ///
+    /// `MedicationDraft.Phase` is what the form collects; `MedPhase` is what
+    /// arrives on the wire. They are separate types on purpose and not a
+    /// duplication to be collapsed: the draft carries no id, because the id
+    /// belongs to whoever stores the row, and it holds an empty label where the
+    /// wire model holds nil, because a text field is always a string.
+    ///
+    /// The real client bridges them by encoding `MedicationDraft.phaseJSON`.
+    /// The demo has no JSON in the middle, so it has to bridge them in Swift --
+    /// and skipping the bridge is not a near-miss, it is a type error: a step
+    /// the family adds on a new medication is a `Phase` sitting in an array
+    /// declared `[MedPhase]`. That is exactly what happened in
+    /// `createMedication`, which passed `draft.newPhase` straight through while
+    /// `updateMedication` converted. Hence one function rather than the same
+    /// six lines written twice, once correctly.
+    ///
+    /// The id keeps the `ph_demo_new_` prefix the editor's delete uses to find
+    /// a step it may remove before saving; `index` is what makes it unique
+    /// within one medication.
+    private static func wirePhase(_ phase: MedicationDraft.Phase,
+                                  index: Int) -> MedPhase {
+        MedPhase(id: "ph_demo_new_\(index)",
+                 startsOn: phase.startsOn, endsOn: phase.endsOn,
+                 unitsPerDose: phase.unitsPerDose,
+                 label: phase.label.isEmpty ? nil : phase.label)
+    }
+
     private static func build(id: String, recipientId: String,
                               draft: MedicationDraft,
                               phases: [MedPhase]) -> Medication {
