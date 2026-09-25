@@ -289,23 +289,18 @@ jobs:
           DIST_P12_BASE64: ${{ secrets.DIST_P12_BASE64 }}
           DIST_P12_PASSWORD: ${{ secrets.DIST_P12_PASSWORD }}
         run: |
-          # A fresh runner's keychain holds no distribution identity, so
-          # `-allowProvisioningUpdates` does the reasonable thing and mints a
-          # new distribution certificate -- except the team is already at
-          # Apple's ceiling of three, so it cannot. The export then fails with
-          #
-          #     Cloud signing permission error
-          #     No profiles for 'com.cyan0914.carehive' were found
-          #
-          # which names neither the cause (a full certificate quota) nor the
-          # remedy. The archive step just before it succeeds, because that one
-          # only needs a development identity and that quota has room.
-          #
-          # Importing the certificate the team already has means Xcode reuses
-          # it rather than trying to make a fourth. Nothing is revoked and no
-          # other app is touched: an Apple Distribution certificate is issued
-          # to the team, not to an app, so the same one signs CareHive's
+          # A fresh runner's keychain holds no distribution identity, and the
+          # team is at Apple's ceiling of three distribution certificates, so
+          # one cannot be minted. Importing the one the team already has costs
+          # nothing and revokes nothing: an Apple Distribution certificate is
+          # issued to the team, not to an app, so the same one signs CareHive's
           # profile and every other app's.
+          #
+          # This certificate turned out not to be the export failure -- that
+          # was automatic signing refusing to use a profile that already
+          # existed (see the next step). It is still required, because manual
+          # signing has to find an identity in the keychain to sign with, and
+          # without this there is none.
           KEYCHAIN="$RUNNER_TEMP/carehive-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
 
@@ -330,6 +325,20 @@ jobs:
           echo "--- signing identities ---"
           security find-identity -v -p codesigning "$KEYCHAIN"
 
+          # Read out rather than hardcoded. The team's certificate is named
+          # "iPhone Distribution: ..." (the older spelling), and a build that
+          # asks for the newer "Apple Distribution" can fail to match it --
+          # which surfaces as "no signing certificate found", pointing at the
+          # certificate that is right there in the keychain.
+          SIGN_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | sed -n 's/^[^"]*"\(.*\)"[[:space:]]*$/\1/p' | head -1)
+          if [ -z "$SIGN_IDENTITY" ]; then
+            echo "::error::no codesigning identity was imported"
+            exit 1
+          fi
+          echo "SIGN_IDENTITY=$SIGN_IDENTITY" >> "$GITHUB_ENV"
+          echo "will sign with: $SIGN_IDENTITY"
+
           # Without this, codesign blocks on a keychain prompt that nobody is
           # present to answer, and the build hangs until it times out.
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
@@ -338,20 +347,69 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
           security default-keychain -s "$KEYCHAIN"
 
+      - name: Install the provisioning profile
+        env:
+          PROFILE_BASE64: ${{ secrets.PROFILE_BASE64 }}
+        run: |
+          # The certificate alone did not fix the export. It kept failing with
+          #
+          #     Cloud signing permission error
+          #     No profiles for 'com.cyan0914.carehive' were found
+          #
+          # even though a valid profile existed in App Store Connect the whole
+          # time. That is the tell: Xcode's automatic signing does not go
+          # looking for a profile that already exists -- it asks the cloud
+          # signing service to *make* one, and when that service declines, the
+          # error names the bundle id instead of the service. The key is not at
+          # fault; it created this very profile over the API.
+          #
+          # So the cloud signing service is taken out of the path. The profile
+          # is installed where Xcode looks for it on disk and named explicitly,
+          # which is what manual signing means.
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          printf '%s' "$PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/carehive.mobileprovision"
+
+          security cms -D -i "$RUNNER_TEMP/carehive.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")
+
+          cp "$RUNNER_TEMP/carehive.mobileprovision" \
+             "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          echo "installed profile '$PROFILE_NAME' ($PROFILE_UUID)"
+
+          # Read out of the profile rather than hardcoded: a rename in the
+          # portal would otherwise surface as a signing failure pointing at the
+          # bundle id, which is the wrong place to go looking.
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+
+          # Both of the things the next two steps assume, checked here so a bad
+          # profile fails next to the profile instead of inside a xcodebuild log
+          # long enough that the actual error scrolls away.
+          /usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.applesignin' \
+            "$RUNNER_TEMP/profile.plist" > /dev/null \
+            || { echo "::error::the profile does not carry Sign in with Apple"; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' \
+            "$RUNNER_TEMP/profile.plist" | grep -q "com.cyan0914.carehive" \
+            || { echo "::error::the profile is for a different bundle id"; exit 1; }
+
       - name: Archive
         run: |
           set -o pipefail
+          # Manual signing, and no -allowProvisioningUpdates: the profile is on
+          # disk and named, so there is nothing left for Xcode to negotiate.
+          # Automatic signing previously "succeeded" here by signing with a
+          # development identity, which is why the archive passed and the export
+          # then could not re-sign it.
           xcodebuild archive \
             -project CareHive.xcodeproj \
             -scheme CareHive \
             -configuration Release \
             -destination "generic/platform=iOS" \
             -archivePath "$RUNNER_TEMP/CareHive.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             DEVELOPMENT_TEAM=H4VQ9X6KYK \
             > archive.log 2>&1 || {
               echo "::group::archive errors"
@@ -378,14 +436,44 @@ jobs:
             exit 1
           fi
 
+          # aps-environment is not in the entitlements file -- it is injected
+          # from the provisioning profile, and only if that profile carries it.
+          # A build without it signs cleanly, uploads cleanly, and then never
+          # receives a push: the app's whole purpose is a reminder that arrives,
+          # and its absence is invisible until a dose is missed. So it is
+          # checked here, where the profile is still in scope, rather than
+          # discovered by a family.
+          if ! grep -q "aps-environment" entitlements.xml; then
+            echo "::error::archive is missing aps-environment -- pushes will never arrive"
+            exit 1
+          fi
+          echo "Sign in with Apple and push are both present."
+
       - name: Export and upload to TestFlight
         run: |
           set -o pipefail
+          # Generated rather than committed so the profile name in it cannot
+          # drift from the profile actually installed two steps up. ci/
+          # ExportOptions.plist is kept as the documented shape of this file.
+          OPTIONS="$RUNNER_TEMP/ExportOptions.plist"
+          /usr/libexec/PlistBuddy \
+            -c "Add :method string app-store-connect" \
+            -c "Add :destination string upload" \
+            -c "Add :teamID string H4VQ9X6KYK" \
+            -c "Add :signingStyle string manual" \
+            -c "Add :uploadSymbols bool true" \
+            -c "Add :manageAppVersionAndBuildNumber bool false" \
+            -c "Add :provisioningProfiles dict" \
+            -c "Add :provisioningProfiles:com.cyan0914.carehive string $PROFILE_NAME" \
+            "$OPTIONS"
+          plutil -p "$OPTIONS"
+
+          # The authentication key stays: it is what uploads to TestFlight.
+          # -allowProvisioningUpdates goes, because there is nothing to update.
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/CareHive.xcarchive" \
-            -exportOptionsPlist ci/ExportOptions.plist \
+            -exportOptionsPlist "$OPTIONS" \
             -exportPath "$RUNNER_TEMP/export" \
-            -allowProvisioningUpdates \
             -authenticationKeyPath "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8" \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \

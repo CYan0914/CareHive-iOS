@@ -17,13 +17,32 @@
 	<key>teamID</key>
 	<string>H4VQ9X6KYK</string>
 
-	<!-- Automatic signing on purpose. The App ID's capabilities were changed
-	     (Sign in with Apple was switched on), which invalidates every profile
-	     issued before that moment, so the profile has to be issued during the
-	     build. A manual profile pinned into a secret would go stale silently
-	     and present as a signing error with no cause. -->
+	<!-- Manual signing, with the profile named below.
+
+	     Automatic signing was the original choice and it does not work on a CI
+	     runner. It does not adopt a profile that already exists in the account;
+	     it asks the cloud signing service to mint one, and when that service
+	     declines, the error blames the bundle id:
+
+	         Cloud signing permission error
+	         No profiles for 'com.cyan0914.carehive' were found
+
+	     Neither line is true, which is what makes it expensive to debug. The
+	     profile existed, and the key could manage profiles: it created that
+	     one over the API. Naming the profile explicitly takes the signing
+	     service out of the path.
+
+	     This file is documentation; the workflow generates the real
+	     ExportOptions at build time so the profile name cannot drift from the
+	     one actually installed. -->
 	<key>signingStyle</key>
-	<string>automatic</string>
+	<string>manual</string>
+
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.cyan0914.carehive</key>
+		<string>CareHive App Store</string>
+	</dict>
 
 	<key>uploadSymbols</key>
 	<true/>
