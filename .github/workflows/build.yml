@@ -436,18 +436,30 @@ jobs:
             exit 1
           fi
 
-          # aps-environment is not in the entitlements file -- it is injected
-          # from the provisioning profile, and only if that profile carries it.
-          # A build without it signs cleanly, uploads cleanly, and then never
-          # receives a push: the app's whole purpose is a reminder that arrives,
-          # and its absence is invisible until a dose is missed. So it is
-          # checked here, where the profile is still in scope, rather than
-          # discovered by a family.
-          if ! grep -q "aps-environment" entitlements.xml; then
-            echo "::error::archive is missing aps-environment -- pushes will never arrive"
+          # This check caught a real defect on its first run, which is why it
+          # is worth its length. The entitlements file did not declare
+          # aps-environment, on the belief that the provisioning profile would
+          # supply it. It does not -- the profile is the ceiling, the
+          # entitlements file is the request, and the request is what gets
+          # signed. The archive that reached here had no aps-environment at
+          # all, and would have uploaded, passed review, and then never
+          # delivered a single reminder.
+          #
+          # The value is asserted, not just its presence, because the two
+          # values are not interchangeable: a development value in an App Store
+          # build is refused by the production APNs. It also proves the
+          # $(APS_ENVIRONMENT) in the entitlements file actually expanded --
+          # an unexpanded literal would land here as the literal.
+          if ! grep -q "<key>aps-environment</key>" entitlements.xml; then
+            echo "::error::archive has no aps-environment -- pushes will never arrive"
             exit 1
           fi
-          echo "Sign in with Apple and push are both present."
+          if ! grep -A1 "<key>aps-environment</key>" entitlements.xml | grep -q "production"; then
+            echo "::error::aps-environment is not 'production' in an App Store archive"
+            grep -A1 "<key>aps-environment</key>" entitlements.xml || true
+            exit 1
+          fi
+          echo "Sign in with Apple and aps-environment=production are both present."
 
       - name: Export and upload to TestFlight
         run: |

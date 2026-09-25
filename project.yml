@@ -30,12 +30,23 @@ settings:
     # for it and where to change it. Hearth learned this the same way.
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
+    # Read by Resources/CareHive.entitlements, which is where aps-environment
+    # is declared. Xcode expands build settings in an entitlements file, so
+    # this is the value that ends up in the signature.
+    #
+    # development by default because that is the correct answer for everything
+    # except an App Store archive: a development-signed build pointing at the
+    # production APNs is refused registration, and the failure is a push that
+    # silently never arrives rather than an error.
+    APS_ENVIRONMENT: development
+
   configs:
     Debug:
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
     Release:
       SWIFT_COMPILATION_MODE: wholemodule
       SWIFT_OPTIMIZATION_LEVEL: "-O"
+      APS_ENVIRONMENT: production
 
 targets:
   CareHive:

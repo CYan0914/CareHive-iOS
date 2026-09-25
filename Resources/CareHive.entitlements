@@ -15,11 +15,24 @@
 		<string>Default</string>
 	</array>
 
-	<!-- aps-environment is deliberately absent. It is injected from the
-	     provisioning profile at build time, and its value has to differ
-	     between a debug build (development) and an App Store archive
-	     (production). Hardcoding either one produces a build that signs
-	     cleanly and then fails to receive a single push -- the failure shows
-	     up as a heartbeat that never arrives, not as a build error. -->
+	<!-- Push. The reminders are what this app is for, so this entitlement is
+	     the difference between the product and a logbook.
+
+	     It has to be declared HERE, and that was learned the hard way. The
+	     provisioning profile carries aps-environment too, which makes it look
+	     like the profile supplies it. It does not: the profile is the ceiling,
+	     this file is the request, and what gets signed is the request. A build
+	     whose entitlements file omits this signs cleanly, uploads cleanly and
+	     passes review, with a signature that has no aps-environment in it at
+	     all, and then no push ever arrives. There is no error anywhere, at
+	     any point.
+
+	     The value is a build setting rather than a literal because the two
+	     environments are not interchangeable: a development-signed build that
+	     claims production registers against the production APNs and is
+	     refused, and an App Store build that claims development cannot be
+	     signed at all. project.yml sets it per configuration. -->
+	<key>aps-environment</key>
+	<string>$(APS_ENVIRONMENT)</string>
 </dict>
 </plist>
