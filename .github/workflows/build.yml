@@ -201,6 +201,10 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.create_ipa == 'true'
+    # Generous but finite: a normal archive is 15-20 minutes, and the expensive
+    # failure mode here is not a slow build but a build that never ends --
+    # which spends macOS minutes and, worse, reports nothing.
+    timeout-minutes: 90
     runs-on: macos-latest
 
     env:
@@ -561,6 +565,11 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.screenshots == 'true'
     runs-on: macos-latest
+    # Bounded, because this job drives a simulator and a wedged simulator is
+    # not an error -- it is silence. A capture step that normally takes 19
+    # minutes sat at 38 with no output and no failure, and without a cap it
+    # would have held the run open for six hours while looking like work.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout

@@ -59,6 +59,27 @@ pick() {
     | [ .[].value[] | select(.name | test($p)) ][0].udid // empty'
 }
 
+# macOS ships no `timeout`, and the simctl calls below are exactly the ones
+# that hang: a wedged simulator makes `simctl io screenshot` return nothing and
+# never exit. Without this the job sits "in progress" for the full six-hour
+# default and reads like slow work rather than a stuck runner, which is how a
+# 19-minute capture step came to be sitting at 38 minutes with no output.
+#
+# SIGTERM first so simctl can clean up, SIGKILL if it will not.
+with_timeout() {
+  local secs="$1"; shift
+  local rc=0
+  "$@" & local pid=$!
+  ( sleep "$secs"
+    kill -TERM "$pid" 2>/dev/null
+    sleep 5
+    kill -KILL "$pid" 2>/dev/null ) & local watcher=$!
+  wait "$pid" || rc=$?
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  return $rc
+}
+
 # A device only if one is creatable. Apple removes device types from newer
 # runtimes, so building a 6.5" iPhone works on some runners and not others --
 # and when it does not, the runner's own devices are all 6.9", which is a
@@ -93,7 +114,9 @@ make_or_borrow_tablet() {
 wait_stable() {
   local udid="$1" out="$2" prev="" cur="" i
   for i in $(seq 1 45); do
-    xcrun simctl io "$udid" screenshot "$out" >/dev/null 2>&1 || true
+    # Bounded per call. The loop's own 45 iterations only bound a simulator
+    # that keeps answering; they do not bound one call that never returns.
+    with_timeout 30 xcrun simctl io "$udid" screenshot "$out" >/dev/null 2>&1 || true
     cur=$(md5 -q "$out" 2>/dev/null || echo "")
     if [ -n "$prev" ] && [ "$cur" = "$prev" ]; then return 0; fi
     prev="$cur"
@@ -117,24 +140,33 @@ capture() {
   if [ "$kind" = iphone ]; then w=$PHONE_W; h=$PHONE_H; else w=$TABLET_W; h=$TABLET_H; fi
 
   mkdir -p "$dir"
-  xcrun simctl bootstatus "$udid" -b 2>/dev/null || echo "  note: bootstatus non-zero, continuing"
+  echo "  [$kind] booting $udid"
+  # bootstatus blocks until the device finishes booting, which on a cold
+  # runtime is minutes -- and forever if the boot wedges. Bounded, and the
+  # failure is allowed through because the install below is the real test.
+  with_timeout 420 xcrun simctl bootstatus "$udid" -b 2>/dev/null \
+    || echo "  note: bootstatus timed out or non-zero, continuing"
 
-  xcrun simctl install "$udid" "$APP"      # before launch, always
-  xcrun simctl status_bar "$udid" override \
+  with_timeout 180 xcrun simctl install "$udid" "$APP"   # before launch, always
+  with_timeout 60 xcrun simctl status_bar "$udid" override \
     --time "9:41" --batteryState charged --batteryLevel 100 \
     --cellularBars 4 --wifiBars 3
 
   # Warm launch, discarded. The first launch of a freshly installed app does
   # its first-run work while the screen is already up.
-  xcrun simctl launch "$udid" "$BUNDLE_ID" -CareHiveDemo "${screens[0]}" >/dev/null 2>&1 || true
+  with_timeout 60 xcrun simctl launch "$udid" "$BUNDLE_ID" -CareHiveDemo "${screens[0]}" >/dev/null 2>&1 || true
   wait_stable "$udid" /tmp/warm.png || echo "  note: warm-up never settled"
-  xcrun simctl terminate "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true
+  with_timeout 60 xcrun simctl terminate "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true
 
-  local screen raw d
+  local screen raw d n=0 total=${#screens[@]}
   for screen in "${screens[@]}"; do
-    xcrun simctl terminate "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true
-    if ! xcrun simctl launch "$udid" "$BUNDLE_ID" -CareHiveDemo "$screen" > /tmp/launch.log 2>&1; then
-      echo "::error::launch failed screen=$screen"; cat /tmp/launch.log; exit 1
+    n=$((n + 1))
+    # Printed before the work, so a hung run says which screen hung. Without
+    # it the last line is the one before the loop and every screen looks alike.
+    echo "  [$kind $n/$total] $screen"
+    with_timeout 60 xcrun simctl terminate "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true
+    if ! with_timeout 90 xcrun simctl launch "$udid" "$BUNDLE_ID" -CareHiveDemo "$screen" > /tmp/launch.log 2>&1; then
+      echo "::error::launch failed or timed out screen=$screen"; cat /tmp/launch.log; exit 1
     fi
     raw="/tmp/raw-$kind-$screen.png"
     if ! wait_stable "$udid" "$raw"; then
@@ -148,6 +180,7 @@ capture() {
     fi
     echo "  ok $screen -> $d"
   done
+  echo "  [$kind] done"
 }
 
 PHONE=$(make_or_borrow_phone)
