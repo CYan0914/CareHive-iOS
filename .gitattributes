@@ -20,6 +20,14 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 
+# Property lists are read by macOS tooling -- the export options by
+# `xcodebuild -exportArchive`, the entitlements by the linker -- and are
+# generated on this machine with `core.autocrlf=true`. A CRLF plist is at best
+# a noisy diff and at worst a plist that a strict parser rejects, and the
+# failure names the setting rather than the line ending.
+*.plist text eol=lf
+*.entitlements text eol=lf
+
 # Rendered images are large and must never be normalised.
 *.png binary
 *.jpg binary

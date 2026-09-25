@@ -24,8 +24,16 @@ on:
   push:
     branches: [main]
 
+# The compile check and the archive are different jobs with different costs,
+# and grouping them together means dispatching an archive cancels the compile
+# that was already running. The result is a build that shows as cancelled and
+# tells you nothing, right when you are most likely to be watching it. The
+# `create_ipa` input is part of the key for that reason, so a push and a
+# dispatch never evict each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: >-
+    ${{ github.workflow }}-${{ github.ref }}-${{
+    github.event.inputs.create_ipa || 'compile' }}
   cancel-in-progress: true
 
 jobs:
@@ -175,4 +183,148 @@ jobs:
           path: |
             build.log
             test.log
+          retention-days: 7
+
+  # ─── Signed archive, uploaded to TestFlight (only when asked) ─────────────
+  #
+  # This job is the only way an App Store build is produced. The job above
+  # answers "does it compile" cheaply and unsigned on every push; this one
+  # needs a signing identity, a freshly issued provisioning profile and an
+  # upload, so it runs only when `create_ipa` is true.
+  #
+  # They live in one file deliberately. A compile check and an archive split
+  # across two workflows are two things to watch, and the way that goes wrong
+  # is watching the wrong one and believing a build succeeded.
+  archive:
+    name: Archive and upload to TestFlight
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.create_ipa == 'true'
+    runs-on: macos-latest
+
+    env:
+      # These let xcodebuild talk to Apple without a logged-in Xcode, which is
+      # the only way this works on a runner. It matters more here than usual:
+      # the App ID's capabilities were changed, so the provisioning profile is
+      # issued during this build rather than reused from anywhere.
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode (26+ required for App Store uploads)
+        run: |
+          echo "=== Available Xcode ==="
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none found)"
+          for xc in /Applications/Xcode*.app; do
+            if sudo xcode-select -s "$xc/Contents/Developer" 2>/dev/null; then
+              sdk=$(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null || echo "unknown")
+              echo "  $xc -> iOS SDK $sdk"
+              if [[ "$sdk" == 2[6-9].* ]] || [[ "$sdk" == [3-9]* ]]; then
+                echo "Selected: $xc (iOS SDK $sdk)"
+                xcodebuild -version
+                exit 0
+              fi
+            fi
+          done
+          echo "No Xcode with SDK 26+ found -- falling back"
+          xcodebuild -version
+
+      - name: Install xcodegen
+        run: |
+          brew install xcodegen 2>/dev/null || brew upgrade xcodegen 2>/dev/null
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: |
+          rm -rf CareHive.xcodeproj
+          xcodegen generate
+
+      - name: Install the App Store Connect API key
+        env:
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          mkdir -p "$HOME/private_keys"
+          printf '%s' "$ASC_KEY_P8_BASE64" | base64 --decode \
+            > "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
+          chmod 600 "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
+          # A truncated decode produces a signing failure that reads like a
+          # permissions problem, so the size is printed rather than assumed.
+          # Only the header line ever reaches the log -- never the key body.
+          head -1 "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
+          echo "key bytes: $(wc -c < "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8")"
+
+      - name: Archive
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project CareHive.xcodeproj \
+            -scheme CareHive \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/CareHive.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM=H4VQ9X6KYK \
+            > archive.log 2>&1 || {
+              echo "::group::archive errors"
+              grep -nE "error:|error :|fatal" archive.log | head -40 || true
+              echo "::endgroup::"
+              echo "::group::last 80 lines"
+              tail -80 archive.log
+              echo "::endgroup::"
+              exit 1
+            }
+          tail -20 archive.log
+
+      - name: Verify the archive carries Sign in with Apple
+        run: |
+          # Sign in with Apple is the only way into the app, and a build without
+          # this entitlement compiles, installs and launches cleanly -- and then
+          # shows a button that does nothing, with no error anywhere. The only
+          # person who finds out is the reviewer. So it is checked, not trusted.
+          APP="$RUNNER_TEMP/CareHive.xcarchive/Products/Applications/CareHive.app"
+          codesign -d --entitlements :- "$APP" > entitlements.xml 2>/dev/null || true
+          cat entitlements.xml
+          if ! grep -q "com.apple.developer.applesignin" entitlements.xml; then
+            echo "::error::archive is missing com.apple.developer.applesignin"
+            exit 1
+          fi
+
+      - name: Export and upload to TestFlight
+        run: |
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/CareHive.xcarchive" \
+            -exportOptionsPlist ci/ExportOptions.plist \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            > export.log 2>&1 || {
+              echo "::group::export errors"
+              grep -nE "error:|error :" export.log | head -40 || true
+              echo "::endgroup::"
+              echo "::group::last 80 lines"
+              tail -80 export.log
+              echo "::endgroup::"
+              exit 1
+            }
+          tail -30 export.log
+
+      - name: Upload archive logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-logs
+          path: |
+            archive.log
+            export.log
+            entitlements.xml
           retention-days: 7

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Sign in with Apple is the only way into this app, so this entitlement
+	     is what makes the first screen work at all. Without it the
+	     ASAuthorizationController sheet never appears and a reviewer has no
+	     way past the sign-in screen.
+
+	     `Default` is the only meaningful value: it means "Sign in with Apple
+	     for this app", as opposed to the alternate key types that are used
+	     when one Apple ID serves a primary app and its satellites. -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
+
+	<!-- aps-environment is deliberately absent. It is injected from the
+	     provisioning profile at build time, and its value has to differ
+	     between a debug build (development) and an App Store archive
+	     (production). Hardcoding either one produces a build that signs
+	     cleanly and then fails to receive a single push -- the failure shows
+	     up as a heartbeat that never arrives, not as a build error. -->
+</dict>
+</plist>

@@ -47,13 +47,30 @@ targets:
       - path: Models
       - path: Services
       - path: Views
+      # The entitlements file lives in this directory but is not a resource.
+      # Without the exclusion it is swept into Copy Bundle Resources, which
+      # ships a copy of the entitlement list inside the app and draws a warning
+      # on every build. It still reaches the linker -- CODE_SIGN_ENTITLEMENTS
+      # below names it by path, not through the project's file list.
       - path: Resources
+        excludes:
+          - "*.entitlements"
     settings:
       base:
         PRODUCT_NAME: CareHive
         PRODUCT_BUNDLE_IDENTIFIER: com.cyan0914.carehive
         INFOPLIST_FILE: Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
+
+        # Sign in with Apple is the only way into the app, so a build without
+        # this entitlement compiles, installs, launches -- and then shows a
+        # sign-in button that does nothing at all. The sheet never appears,
+        # there is no error, and the only person who finds out is the reviewer,
+        # who then cannot get past the first screen.
+        #
+        # The matching capability is enabled on the App ID; without both halves
+        # the signing step fails instead, which is at least louder.
+        CODE_SIGN_ENTITLEMENTS: Resources/CareHive.entitlements
 
   # A test target from the start, because the two pieces of logic here that are
   # actually easy to get wrong -- parsing the API's wall-clock strings, and the

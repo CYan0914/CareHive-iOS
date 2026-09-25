@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- `app-store-connect` rather than the older `app-store`. Xcode renamed
+	     the method in 15.3 and the old spelling is on its way out; the failure
+	     mode is an export that refuses an otherwise-valid archive. -->
+	<key>method</key>
+	<string>app-store-connect</string>
+
+	<!-- Upload straight from the export rather than writing an .ipa to the
+	     runner and posting it afterwards. One fewer artefact to lose, and the
+	     credential that signed the archive is the one that uploads it. -->
+	<key>destination</key>
+	<string>upload</string>
+
+	<key>teamID</key>
+	<string>H4VQ9X6KYK</string>
+
+	<!-- Automatic signing on purpose. The App ID's capabilities were changed
+	     (Sign in with Apple was switched on), which invalidates every profile
+	     issued before that moment, so the profile has to be issued during the
+	     build. A manual profile pinned into a secret would go stale silently
+	     and present as a signing error with no cause. -->
+	<key>signingStyle</key>
+	<string>automatic</string>
+
+	<key>uploadSymbols</key>
+	<true/>
+
+	<!-- The version and build number are owned by project.yml, which is
+	     reviewable in a diff. Letting the exporter pick its own build number
+	     means the number that reaches App Store Connect is decided inside a
+	     black box, and the next upload collides with it. -->
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>
