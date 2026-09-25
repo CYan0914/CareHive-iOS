@@ -1,0 +1,26 @@
+# Shell scripts Xcode Cloud runs must reach macOS with LF endings.
+#
+# This machine has `core.autocrlf=true`, which is the right default for Swift
+# sources and a trap for `ci_scripts/`. A shebang line ending in CRLF is not
+# `#!/bin/zsh` -- it is `#!/bin/zsh\r`, and the kernel looks for an interpreter
+# named after the carriage return and fails with
+#
+#     /bin/zsh^M: bad interpreter: No such file or directory
+#
+# which names the one file that is fine and points at nothing useful. The
+# `-text` for the same reason: no end-of-line translation in either direction,
+# so what is committed is byte-for-byte what Apple's runner executes.
+#
+# `.sh` under any directory rather than `ci_scripts/*.sh`, so a script added
+# later somewhere else is covered without anyone remembering this file exists.
+*.sh text eol=lf
+
+# The XcodeGen spec is read by a tool that runs on macOS, and the generated
+# project file is compared textually when a build goes wrong.
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Rendered images are large and must never be normalised.
+*.png binary
+*.jpg binary
+*.pdf binary

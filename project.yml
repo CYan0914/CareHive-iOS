@@ -83,3 +83,22 @@ schemes:
       config: Debug
       targets:
         - CareHiveTests
+
+    # `archive` has to be declared, and its absence was a real trap.
+    #
+    # Xcode Cloud decides what it can build with
+    # `xcodebuild -project CareHive.xcodeproj -describeAllArchivableProducts
+    # -json`, and a scheme with no Archive action is not an archivable product.
+    # The failure mode is not an error message about schemes -- it is an empty
+    # product list while configuring the workflow, which reads like Xcode Cloud
+    # cannot see the repository at all.
+    #
+    # Declared explicitly rather than left to a default, because this is the
+    # action every App Store build goes through and it should be visible in the
+    # file that decides how the app is built. Release, because archiving an
+    # unoptimised build is never what the App Store wants.
+    #
+    # Only CareHive is archived: `build` above limits CareHiveTests to the test
+    # action, so the test bundle stays out of the .xcarchive.
+    archive:
+      config: Release
