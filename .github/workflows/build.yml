@@ -32,8 +32,9 @@ on:
 # dispatch never evict each other.
 concurrency:
   group: >-
-    ${{ github.workflow }}-${{ github.ref }}-${{
-    github.event.inputs.create_ipa || 'compile' }}
+    ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{
+    github.event.inputs.create_ipa || '0' }}-${{
+    github.event.inputs.screenshots || '0' }}
   cancel-in-progress: true
 
 jobs:
@@ -409,3 +410,103 @@ jobs:
             export.log
             entitlements.xml
           retention-days: 7
+
+  # ─── App Store screenshots (only when asked) ──────────────────────────────
+  #
+  # A submission needs screenshots and there were none, so this produces them
+  # from the app itself rather than from mockups: one launch per screen with
+  # `-CareHiveDemo`, and the picture is whatever the real view renders.
+  #
+  # The compile job's output is reused rather than rebuilt, so this is a
+  # capture run and not a second build.
+  screenshots:
+    name: Capture App Store screenshots
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.screenshots == 'true'
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode (26+ required for App Store uploads)
+        run: |
+          echo "=== Available Xcode ==="
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none found)"
+          for xc in /Applications/Xcode*.app; do
+            if sudo xcode-select -s "$xc/Contents/Developer" 2>/dev/null; then
+              sdk=$(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null || echo "unknown")
+              echo "  $xc -> iOS SDK $sdk"
+              if [[ "$sdk" == 2[6-9].* ]] || [[ "$sdk" == [3-9]* ]]; then
+                echo "Selected: $xc (iOS SDK $sdk)"
+                xcodebuild -version
+                exit 0
+              fi
+            fi
+          done
+          echo "No Xcode with SDK 26+ found -- falling back"
+          xcodebuild -version
+
+      - name: Install xcodegen
+        run: |
+          brew install xcodegen 2>/dev/null || brew upgrade xcodegen 2>/dev/null
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: |
+          rm -rf CareHive.xcodeproj
+          xcodegen generate
+
+      - name: Ensure the iOS platform is installed
+        run: |
+          sudo xcodebuild -license accept 2>&1 || true
+          sudo xcodebuild -runFirstLaunch 2>&1 || true
+          for i in 1 2 3; do
+            echo "Attempt $i..."
+            sudo xcodebuild -downloadPlatform iOS -quiet 2>&1 && break
+            echo "Attempt $i failed, sleeping 15s..."
+            sleep 15
+          done
+          xcrun --sdk iphonesimulator --show-sdk-version || echo "simulator SDK not found"
+
+      - name: Build for Simulator
+        run: |
+          # Debug, and into a known directory. Debug because the capture run
+          # has no reason to pay for whole-module optimisation, and no banner
+          # or ribbon is gated on the configuration -- the demo is selected by
+          # launch argument, in either configuration. The path matters because
+          # the capture script looks there.
+          set +e
+          xcodebuild build \
+            -project CareHive.xcodeproj \
+            -scheme CareHive \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            > build.log 2>&1
+          status=$?
+          set -e
+          if [ $status -ne 0 ]; then
+            echo "::group::errors"
+            grep -nE "error:|error :|fatal" build.log | head -40 || true
+            echo "::endgroup::"
+            tail -60 build.log
+            exit $status
+          fi
+
+      - name: Capture
+        run: |
+          chmod +x ci/capture_screenshots.sh
+          bash ci/capture_screenshots.sh
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: appstore-screenshots
+          path: shots/
+          if-no-files-found: error
+          retention-days: 30
