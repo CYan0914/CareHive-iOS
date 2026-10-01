@@ -1,8 +1,21 @@
 # CareHive — App Privacy 答案表（App Store Connect 专用）
 
-**为什么这份文件存在**：App Privacy 是**唯一无法用 API 完成**的上架步骤之一。
-`GET /v1/apps/{id}/appPrivacyDetails` 返回 **404**，没有任何写入端点。只能用网页填。
-它是法律声明，不能靠猜，所以下面每一条都标注了它在代码里的取证位置。
+**为什么这份文件存在**：App Privacy 是法律声明，不能靠猜，所以下面每一条都
+标注了它在代码里的取证位置。
+
+> **更正（2026-09-25，实测）**：本文件原先写着「App Privacy 只能网页填」，
+> **这条是错的**。它可以用 API 完成，只是不在公开 API 里 —— 公开 API
+> （`api.appstoreconnect.apple.com/v1`）里确实没有这个资源，但 ASC 网页自己用的
+> **iris API**（`appstoreconnect.apple.com/iris/v1`，浏览器会话 cookie 鉴权）里有。
+>
+> 关键教训：`FORBIDDEN_ERROR: The resource 'appDataUsages' does not allow
+> 'GET_COLLECTION'. Allowed operations are: CREATE, DELETE, UPDATE`
+> —— **读不了 ≠ 写不了**。之前 8 次探测全部是 GET，于是把"用错动词"误判成
+> "资源不存在"。那句 `Allowed operations are:` 就是绿灯。
+>
+> 本 app 的问卷已用 iris 发布（`PATCH /iris/v1/appDataUsagesPublishState/{appId}`），
+> 8 行，`lastPublished 2026-09-25T00:31:40-07:00`。**已发布的答案与下表一致**，
+> 只多了一行保守的 Device ID（见文末判断项 1）。
 
 **本文件不是代码，不参与构建。** 放在仓库里是因为它记录的正是代码所决定的事实。
 
@@ -134,9 +147,7 @@ AuthenticationServices, CommonCrypto, Foundation, StoreKit, SwiftUI
 
 ---
 
-## 另一件同样只能在网页做的事：Content Rights
-
-App Store Connect → CareHive → App Store 标签页 → **Content Rights**
+## Content Rights（已用 API 完成）
 
 > **Does your app contain, show, or access third-party content?**
 
@@ -146,6 +157,11 @@ App Store Connect → CareHive → App Store 标签页 → **Content Rights**
 没有影视、没有新闻源、没有第三方品牌素材、没有抓取来的内容。
 图标、界面文字、演示数据（`DemoAPI`）全部自制。
 
-（API 侧已实测确认这条**不可写**：`PATCH /v1/appInfos/{id}` 与
-`PATCH /v1/appStoreVersions/{id}` 带 `contentRightsDeclaration` 均返回
-**409 ENTITY_ERROR.ATTRIBUTE.UNKNOWN**。只能网页填。）
+> **更正（2026-09-25，实测）**：本文件原先写着这条「只能网页填」，**也是错的**。
+> 当时 PATCH `appInfos` / `appStoreVersions` 得到 409 `ATTRIBUTE.UNKNOWN`，
+> 就记成"网页专属"。实际这个字段在 **app 资源**上：
+> `PATCH /v1/apps/{appId}` 带 `contentRightsDeclaration` 一次成功（200），
+> 值已设为 `DOES_NOT_USE_THIRD_PARTY_CONTENT`。
+>
+> 和 App Privacy 是同一个错误形状：**"在 A 处写不了"被误读成"哪里都写不了"**，
+> 而没去试 B。PATCH 打错资源返回 409，读起来和"这个字段不可写"一模一样。
