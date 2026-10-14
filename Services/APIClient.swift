@@ -333,9 +333,15 @@ actor LiveAPI: CareHiveAPI {
 
     /// `body` is already-encoded JSON, or nil for no body. Callers encode so
     /// that which encoder is used is visible at the call site.
+    ///
+    /// `timeout` overrides the session's 20s for this request only, and only
+    /// sign-in passes one. Raising it on the shared configuration instead would
+    /// make every screen wait out a dead network, which is the opposite of what
+    /// a caregiver standing in a kitchen needs.
     private func request(_ method: String, _ path: String,
                          query: [URLQueryItem] = [],
-                         body: Data? = nil) async throws -> Data {
+                         body: Data? = nil,
+                         timeout: TimeInterval? = nil) async throws -> Data {
         var comps = URLComponents(url: baseURL.appendingPathComponent(path),
                                   resolvingAgainstBaseURL: false)
         if !query.isEmpty { comps?.queryItems = query }
@@ -345,6 +351,7 @@ actor LiveAPI: CareHiveAPI {
 
         var req = URLRequest(url: url)
         req.httpMethod = method
+        if let timeout { req.timeoutInterval = timeout }
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -372,8 +379,10 @@ actor LiveAPI: CareHiveAPI {
         return try decoder.decode(T.self, from: data)
     }
 
-    private func post<T: Decodable, B: Encodable>(_ path: String, body: B) async throws -> T {
-        let data = try await request("POST", path, body: typedEncoder.encode(body))
+    private func post<T: Decodable, B: Encodable>(_ path: String, body: B,
+                                                  timeout: TimeInterval? = nil) async throws -> T {
+        let data = try await request("POST", path, body: typedEncoder.encode(body),
+                                     timeout: timeout)
         return try decoder.decode(T.self, from: data)
     }
 
@@ -787,12 +796,26 @@ actor LiveAPI: CareHiveAPI {
         // Sent with whatever token happens to be stored, which on a first run is
         // none. The server ignores the header on this route: what authorises it
         // is Apple's signature, verified against Apple's keys.
+        //
+        // 60s, against the session's 20s, and this is the one request that gets
+        // it. CareHive 1.0 was rejected under 2.1(a) because a reviewer saw
+        // "Can't reach CareHive" on this screen: the server answered 200 in
+        // 31.9s, having spent 13.6s fetching Apple's keys and 18s exchanging the
+        // authorization code, and the app had given up at 20. The server no
+        // longer does either of those on the response path -- measured at 2-4ms
+        // after the fix -- so this is a backstop, not the repair. It is wide
+        // because a review is one attempt: a reviewer who taps Sign in with
+        // Apple and sees an error does not tap it again, they write it up.
+        //
+        // Deliberately not applied to any other request. A caregiver with no
+        // signal should be told that in 20 seconds, not held for a minute.
         try await post("/v1/auth/apple",
                        body: AppleSignInBody(identityToken: identityToken,
                                              nonce: nonce,
                                              authorizationCode: authorizationCode,
                                              fullName: fullName,
-                                             timezone: timezone))
+                                             timezone: timezone),
+                       timeout: 60)
     }
 
     func updateMe(_ patch: MePatch) async throws -> MeUpdate {
