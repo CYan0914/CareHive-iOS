@@ -15,6 +15,13 @@ struct CareHiveApp: App {
     /// whether it is the live server or the stub.
     private let api: any CareHiveAPI = AppEnvironment.makeAPI()
 
+    init() {
+        // No purchase decision is delegated: the server still verifies every
+        // transaction. RC only observes the install and the StoreKit 2
+        // transactions so sales and new customers land on its dashboard.
+        RevenueCatSupport.start()
+    }
+
     var body: some Scene {
         WindowGroup {
             // Portrait-only is enforced by `UISupportedInterfaceOrientations` in

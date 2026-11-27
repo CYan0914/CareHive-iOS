@@ -398,6 +398,8 @@ jobs:
             || { echo "::error::the profile is for a different bundle id"; exit 1; }
 
       - name: Archive
+        env:
+          REVENUECAT_API_KEY: ${{ secrets.REVENUECAT_API_KEY }}
         run: |
           set -o pipefail
           # Manual signing, and no -allowProvisioningUpdates: the profile is on
@@ -411,10 +413,9 @@ jobs:
             -configuration Release \
             -destination "generic/platform=iOS" \
             -archivePath "$RUNNER_TEMP/CareHive.xcarchive" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
-            DEVELOPMENT_TEAM=H4VQ9X6KYK \
+            SIGN_IDENTITY="$SIGN_IDENTITY" \
+            PROFILE_NAME="$PROFILE_NAME" \
+            REVENUECAT_API_KEY="$REVENUECAT_API_KEY" \
             > archive.log 2>&1 || {
               echo "::group::archive errors"
               grep -nE "error:|error :|fatal" archive.log | head -40 || true
