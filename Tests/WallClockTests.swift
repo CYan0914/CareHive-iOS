@@ -179,7 +179,15 @@ final class ErrorCopyTests: XCTestCase {
                                  givenAtLocal: "2026-09-24 12:06",
                                  administrationId: nil,
                                  dose: nil)
-        XCTAssertEqual(given.attribution, "David Whitfield gave it at 12:06")
+        // Compared against WallClock's own output rather than a literal, because
+        // the formatter follows the device locale: an en_US runner renders this
+        // as "12:06 PM" and an en_GB one as "12:06". A literal assertion passes
+        // on one and fails on the other, which is a broken test rather than a
+        // broken screen. What this has to prove is that the name and the
+        // formatted time are joined, not how the system spells noon.
+        let expectedTime = WallClock.format(hour: 12, minute: 6)
+        XCTAssertFalse(expectedTime.isEmpty)
+        XCTAssertEqual(given.attribution, "David Whitfield gave it at \(expectedTime)")
     }
 
     /// And must still be true when there is not. A blank or an empty sentence
