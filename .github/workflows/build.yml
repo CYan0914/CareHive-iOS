@@ -413,6 +413,7 @@ jobs:
             -configuration Release \
             -destination "generic/platform=iOS" \
             -archivePath "$RUNNER_TEMP/CareHive.xcarchive" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             SIGN_IDENTITY="$SIGN_IDENTITY" \
             PROFILE_NAME="$PROFILE_NAME" \
             REVENUECAT_API_KEY="$REVENUECAT_API_KEY" \
